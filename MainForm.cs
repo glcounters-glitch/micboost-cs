@@ -304,11 +304,18 @@ namespace MicBoost
             var inDev  = _inDevices[inIdx];
             var outDev = _outDevices[outIdx];
 
-            // ── Фиксируем уровень микрофона в Windows = 100% ──
+            // ── Фиксируем уровень входа (USB mic) и выхода (CABLE Output) = 100% ──
             try
             {
                 inDev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
                 inDev.AudioEndpointVolume.Mute = false;
+            }
+            catch { /* не критично */ }
+
+            try
+            {
+                outDev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
+                outDev.AudioEndpointVolume.Mute = false;
             }
             catch { /* не критично */ }
 
