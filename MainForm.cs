@@ -64,12 +64,11 @@ namespace MicBoost
             {
                 WindowState = FormWindowState.Minimized;
                 ShowInTaskbar = false;
-                var startTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+                var startTimer = new System.Windows.Forms.Timer { Interval = 6000 };
                 startTimer.Tick += (s, e) =>
                 {
                     startTimer.Stop();
                     startTimer.Dispose();
-                    LoadDevices();   // перечитать устройства — VB-CABLE уже активен
                     Hide();
                     StartAudio();
                 };
