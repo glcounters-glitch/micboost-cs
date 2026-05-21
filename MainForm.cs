@@ -56,6 +56,24 @@ namespace MicBoost
             LoadDevices();
             LoadSettings();
             SetupTray();
+
+            // Автостарт + свернуть в трей
+            var args = Environment.GetCommandLineArgs();
+            bool autostart = args.Length > 1 && args[1] == "--autostart";
+            if (autostart)
+            {
+                WindowState = FormWindowState.Minimized;
+                ShowInTaskbar = false;
+                var startTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+                startTimer.Tick += (s, e) =>
+                {
+                    startTimer.Stop();
+                    startTimer.Dispose();
+                    Hide();
+                    StartAudio();
+                };
+                startTimer.Start();
+            }
             _vuTimer.Interval = 40;
             _vuTimer.Tick += (s, e) => pnlVU.Invalidate();
             _vuTimer.Start();
