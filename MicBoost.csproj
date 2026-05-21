@@ -6,7 +6,6 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>MicBoost</AssemblyName>
     <RootNamespace>MicBoost</RootNamespace>
-    <ApplicationIcon>micboost.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
