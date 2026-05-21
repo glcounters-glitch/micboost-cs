@@ -19,11 +19,11 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore MicBoost/MicBoost.csproj
+        run: dotnet restore MicBoost.csproj
 
-      - name: Publish (single file, no self-contained)
+      - name: Publish
         run: |
-          dotnet publish MicBoost/MicBoost.csproj `
+          dotnet publish MicBoost.csproj `
             -c Release `
             -r win-x64 `
             --self-contained false `
