@@ -64,11 +64,12 @@ namespace MicBoost
             {
                 WindowState = FormWindowState.Minimized;
                 ShowInTaskbar = false;
-                var startTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+                var startTimer = new System.Windows.Forms.Timer { Interval = 3000 };
                 startTimer.Tick += (s, e) =>
                 {
                     startTimer.Stop();
                     startTimer.Dispose();
+                    LoadDevices();   // перечитать устройства — VB-CABLE уже активен
                     Hide();
                     StartAudio();
                 };
@@ -273,21 +274,16 @@ namespace MicBoost
                 cmbInput.Items.Add(name);
             }
 
-            // Outputs — включаем все состояния чтобы не потерять VB-CABLE
-            var outColl = enumerator.EnumerateAudioEndPoints(DataFlow.Render,
-                DeviceState.Active | DeviceState.Unplugged | DeviceState.Disabled);
+            // Outputs
+            var outColl = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
             var seenOut = new HashSet<string>();
             foreach (var dev in outColl)
             {
-                try
-                {
-                    var name = dev.FriendlyName;
-                    if (seenOut.Contains(name)) { dev.Dispose(); continue; }
-                    seenOut.Add(name);
-                    _outDevices.Add(dev);
-                    cmbOutput.Items.Add(name);
-                }
-                catch { dev.Dispose(); }
+                var name = dev.FriendlyName;
+                if (seenOut.Contains(name)) { dev.Dispose(); continue; }
+                seenOut.Add(name);
+                _outDevices.Add(dev);
+                cmbOutput.Items.Add(name);
             }
 
             // Auto-select USB mic
