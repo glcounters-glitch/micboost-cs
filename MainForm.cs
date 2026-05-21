@@ -5,6 +5,8 @@ using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using System.IO;
+using System.Text.Json;
 
 namespace MicBoost
 {
@@ -33,6 +35,9 @@ namespace MicBoost
         // ── Device lists ─────────────────────────────────────────────
         private List<MMDevice> _inDevices  = new();
         private List<MMDevice> _outDevices = new();
+        private static readonly string SettingsPath =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "MicBoost", "settings.json");
 
         // ── Colors ───────────────────────────────────────────────────
         static readonly Color BG      = Color.FromArgb(15,  15,  19);
@@ -49,6 +54,7 @@ namespace MicBoost
         {
             InitializeComponent();
             LoadDevices();
+            LoadSettings();
             SetupTray();
             _vuTimer.Interval = 40;
             _vuTimer.Tick += (s, e) => pnlVU.Invalidate();
@@ -524,9 +530,39 @@ namespace MicBoost
         {
             if (e.CloseReason == CloseReason.UserClosing)
             { e.Cancel = true; Hide(); return; }
+            SaveSettings();
             StopAudio();
             if (_trayIcon != null) _trayIcon.Visible = false;
             base.OnFormClosing(e);
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(SettingsPath)!;
+                Directory.CreateDirectory(dir);
+                var obj = new { gain = trkGain.Value };
+                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(obj));
+            }
+            catch { }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath)) return;
+                var json = File.ReadAllText(SettingsPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("gain", out var g))
+                {
+                    int val = Math.Clamp(g.GetInt32(), trkGain.Minimum, trkGain.Maximum);
+                    trkGain.Value = val;
+                    OnGainScroll(null, EventArgs.Empty);
+                }
+            }
+            catch { }
         }
 
         protected override void Dispose(bool disposing)
