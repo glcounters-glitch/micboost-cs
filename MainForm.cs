@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace MicBoost
@@ -10,13 +11,13 @@ namespace MicBoost
     public class MainForm : Form
     {
         // ── Audio ────────────────────────────────────────────────────
-        private WaveInEvent?  _waveIn;
-        private WaveOutEvent? _waveOut;
+        private WasapiCapture? _capture;
+        private WasapiOut?     _output;
         private BufferedWaveProvider? _buffer;
-        private bool _running = false;
-        private float _gain   = 3.0f;
-        private float _level  = 0f;
-        private bool  _clip   = false;
+        private bool  _running = false;
+        private float _gain    = 3.0f;
+        private float _level   = 0f;
+        private bool  _clip    = false;
 
         // ── Controls ─────────────────────────────────────────────────
         private ComboBox cmbInput  = new();
@@ -28,6 +29,10 @@ namespace MicBoost
         private Label    lblClip   = new();
         private NotifyIcon? _trayIcon;
         private System.Windows.Forms.Timer _vuTimer = new();
+
+        // ── Device lists ─────────────────────────────────────────────
+        private List<MMDevice> _inDevices  = new();
+        private List<MMDevice> _outDevices = new();
 
         // ── Colors ───────────────────────────────────────────────────
         static readonly Color BG      = Color.FromArgb(15,  15,  19);
@@ -66,7 +71,6 @@ namespace MicBoost
             MaximizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
 
-            // ── Title ──
             var lblTitle = new Label
             {
                 Text      = "◈ MicBoost",
@@ -103,11 +107,10 @@ namespace MicBoost
                 BackColor = PANEL
             };
 
-            var lblIn = MakeLabel("INPUT  (USB Microphone)", 12, 10, MUTED);
-            cmbInput = MakeCombo(12, 28);
-
-            var lblOut = MakeLabel("OUTPUT  (VB-CABLE / Virtual device)", 12, 72, MUTED);
-            cmbOutput = MakeCombo(12, 90);
+            var lblIn  = MakeLabel("INPUT  (USB Microphone)",            12, 10,  MUTED);
+            cmbInput   = MakeCombo(12, 28);
+            var lblOut = MakeLabel("OUTPUT  (VB-CABLE / Virtual device)", 12, 72,  MUTED);
+            cmbOutput  = MakeCombo(12, 90);
 
             var btnRefresh = new Button
             {
@@ -122,23 +125,20 @@ namespace MicBoost
             };
             btnRefresh.FlatAppearance.BorderSize = 0;
             btnRefresh.Click += (s, e) => LoadDevices();
-
-            pnlDev.Controls.AddRange(new Control[]
-                { lblIn, cmbInput, lblOut, cmbOutput, btnRefresh });
+            pnlDev.Controls.AddRange(new Control[] { lblIn, cmbInput, lblOut, cmbOutput, btnRefresh });
 
             // ── Gain ──
             var lblGainHdr = MakeLabel("GAIN", 18, 230, MUTED);
-            lblGainHdr.Location = new Point(18, 230);
 
             trkGain = new TrackBar
             {
-                Minimum  = 10,
-                Maximum  = 100,
-                Value    = 30,
+                Minimum       = 10,
+                Maximum       = 100,
+                Value         = 30,
                 TickFrequency = 10,
-                Location = new Point(18, 248),
-                Size     = new Size(260, 36),
-                BackColor = BG
+                Location      = new Point(18, 248),
+                Size          = new Size(260, 36),
+                BackColor     = BG
             };
             trkGain.Scroll += OnGainScroll;
 
@@ -160,8 +160,7 @@ namespace MicBoost
             {
                 Location  = new Point(18, 318),
                 Size      = new Size(390, 22),
-                BackColor = PANEL,
-                Cursor    = Cursors.Default
+                BackColor = PANEL
             };
             pnlVU.Paint += OnVUPaint;
 
@@ -175,7 +174,7 @@ namespace MicBoost
                 TextAlign = ContentAlignment.MiddleRight
             };
 
-            // ── Start/Stop button ──
+            // ── Start/Stop ──
             btnStart = new Button
             {
                 Text      = "▶  START",
@@ -203,65 +202,66 @@ namespace MicBoost
             });
         }
 
-        private Label MakeLabel(string text, int x, int y, Color color)
-            => new Label
-            {
-                Text      = text,
-                ForeColor = color,
-                BackColor = Color.Transparent,
-                Location  = new Point(x, y),
-                AutoSize  = true
-            };
-
-        private ComboBox MakeCombo(int x, int y)
+        private Label MakeLabel(string text, int x, int y, Color color) => new Label
         {
-            var cb = new ComboBox
-            {
-                Location      = new Point(x, y),
-                Size          = new Size(366, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor     = BG,
-                ForeColor     = TEXT,
-                FlatStyle     = FlatStyle.Flat,
-                Font          = new Font("Consolas", 8.5f)
-            };
-            return cb;
-        }
+            Text      = text,
+            ForeColor = color,
+            BackColor = Color.Transparent,
+            Location  = new Point(x, y),
+            AutoSize  = true
+        };
+
+        private ComboBox MakeCombo(int x, int y) => new ComboBox
+        {
+            Location      = new Point(x, y),
+            Size          = new Size(366, 22),
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            BackColor     = BG,
+            ForeColor     = TEXT,
+            FlatStyle     = FlatStyle.Flat,
+            Font          = new Font("Consolas", 8.5f)
+        };
 
         // ─────────────────────────────────────────────────────────────
-        //  Devices
+        //  Devices via WASAPI MMDeviceEnumerator
         // ─────────────────────────────────────────────────────────────
         private void LoadDevices()
         {
+            // dispose old device references
+            foreach (var d in _inDevices)  try { d.Dispose(); } catch { }
+            foreach (var d in _outDevices) try { d.Dispose(); } catch { }
+            _inDevices.Clear();
+            _outDevices.Clear();
             cmbInput.Items.Clear();
             cmbOutput.Items.Clear();
 
-            var seenIn  = new HashSet<string>();
-            var seenOut = new HashSet<string>();
+            var enumerator = new MMDeviceEnumerator();
 
             // Inputs
-            int inCount = WaveIn.DeviceCount;
-            for (int i = 0; i < inCount; i++)
+            var inColl = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+            var seenIn = new HashSet<string>();
+            foreach (var dev in inColl)
             {
-                var cap  = WaveIn.GetCapabilities(i);
-                var name = cap.ProductName;
-                if (seenIn.Contains(name)) continue;
+                var name = dev.FriendlyName;
+                if (seenIn.Contains(name)) { dev.Dispose(); continue; }
                 seenIn.Add(name);
-                cmbInput.Items.Add(new DeviceItem(i, name));
+                _inDevices.Add(dev);
+                cmbInput.Items.Add(name);
             }
 
             // Outputs
-            int outCount = WaveOut.DeviceCount;
-            for (int i = 0; i < outCount; i++)
+            var outColl = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+            var seenOut = new HashSet<string>();
+            foreach (var dev in outColl)
             {
-                var cap  = WaveOut.GetCapabilities(i);
-                var name = cap.ProductName;
-                if (seenOut.Contains(name)) continue;
+                var name = dev.FriendlyName;
+                if (seenOut.Contains(name)) { dev.Dispose(); continue; }
                 seenOut.Add(name);
-                cmbOutput.Items.Add(new DeviceItem(i, name));
+                _outDevices.Add(dev);
+                cmbOutput.Items.Add(name);
             }
 
-            // Auto-select: USB mic
+            // Auto-select USB mic
             for (int i = 0; i < cmbInput.Items.Count; i++)
             {
                 var n = cmbInput.Items[i]!.ToString()!.ToLower();
@@ -271,7 +271,7 @@ namespace MicBoost
             if (cmbInput.SelectedIndex < 0 && cmbInput.Items.Count > 0)
                 cmbInput.SelectedIndex = 0;
 
-            // Auto-select: CABLE Input
+            // Auto-select CABLE Input
             for (int i = 0; i < cmbOutput.Items.Count; i++)
             {
                 var n = cmbOutput.Items[i]!.ToString()!.ToLower();
@@ -283,7 +283,7 @@ namespace MicBoost
         }
 
         // ─────────────────────────────────────────────────────────────
-        //  Audio engine
+        //  Audio engine — WASAPI Shared callback
         // ─────────────────────────────────────────────────────────────
         private void OnToggle(object? s, EventArgs e)
         {
@@ -293,41 +293,52 @@ namespace MicBoost
 
         private void StartAudio()
         {
-            if (cmbInput.SelectedItem is not DeviceItem inDev ||
-                cmbOutput.SelectedItem is not DeviceItem outDev)
+            int inIdx  = cmbInput.SelectedIndex;
+            int outIdx = cmbOutput.SelectedIndex;
+            if (inIdx < 0 || outIdx < 0)
             {
                 MessageBox.Show("Выбери входное и выходное устройство.", "MicBoost");
                 return;
             }
 
-            var fmt = new WaveFormat(44100, 16, 1);
+            var inDev  = _inDevices[inIdx];
+            var outDev = _outDevices[outIdx];
 
-            _waveIn = new WaveInEvent
+            // ── Фиксируем уровень микрофона в Windows = 100% ──
+            try
             {
-                DeviceNumber = inDev.Index,
-                WaveFormat   = fmt,
-                BufferMilliseconds = 20
-            };
-
-            _buffer  = new BufferedWaveProvider(fmt)
-            {
-                BufferDuration      = TimeSpan.FromMilliseconds(200),
-                DiscardOnBufferOverflow = true
-            };
-
-            _waveIn.DataAvailable += OnData;
-
-            _waveOut = new WaveOutEvent
-            {
-                DeviceNumber = outDev.Index,
-                DesiredLatency = 60
-            };
-            _waveOut.Init(_buffer);
+                inDev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
+                inDev.AudioEndpointVolume.Mute = false;
+            }
+            catch { /* не критично */ }
 
             try
             {
-                _waveIn.StartRecording();
-                _waveOut.Play();
+                // WASAPI Shared capture — использует родной формат устройства
+                _capture = new WasapiCapture(inDev, true, 20);
+                var capFmt = _capture.WaveFormat;
+
+                // конвертируем в PCM 16-bit если нужно (WasapiCapture может вернуть float)
+                WaveFormat outFmt;
+                if (capFmt.Encoding == WaveFormatEncoding.IeeeFloat)
+                    outFmt = new WaveFormat(capFmt.SampleRate, 16, capFmt.Channels);
+                else
+                    outFmt = capFmt;
+
+                _buffer = new BufferedWaveProvider(outFmt)
+                {
+                    BufferDuration          = TimeSpan.FromMilliseconds(500),
+                    DiscardOnBufferOverflow = true
+                };
+
+                _capture.DataAvailable += (s, e) => OnData(e, capFmt, outFmt);
+
+                // WASAPI Shared output
+                _output = new WasapiOut(outDev, AudioClientShareMode.Shared, true, 20);
+                _output.Init(_buffer);
+
+                _capture.StartRecording();
+                _output.Play();
             }
             catch (Exception ex)
             {
@@ -345,45 +356,69 @@ namespace MicBoost
             SetDot(GREEN);
         }
 
-        private unsafe void OnData(object? s, WaveInEventArgs e)
+        private void OnData(WaveInEventArgs e, WaveFormat capFmt, WaveFormat outFmt)
         {
-            var buf = e.Buffer;
+            var src   = e.Buffer;
             int bytes = e.BytesRecorded;
+            if (bytes == 0) return;
 
-            // 16-bit PCM gain + RMS
-            float sumSq = 0;
-            bool  clip  = false;
+            byte[] dst;
 
-            fixed (byte* p = buf)
+            if (capFmt.Encoding == WaveFormatEncoding.IeeeFloat)
             {
-                short* samples = (short*)p;
-                int count = bytes / 2;
-                for (int i = 0; i < count; i++)
+                // float32 → apply gain → convert to int16
+                int samples = bytes / 4;
+                dst = new byte[samples * 2];
+                float sumSq = 0f;
+                bool  clip  = false;
+
+                for (int i = 0; i < samples; i++)
                 {
-                    float f = samples[i] / 32768f * _gain;
+                    float f = BitConverter.ToSingle(src, i * 4) * _gain;
                     if (f >  1f) { f =  1f; clip = true; }
                     if (f < -1f) { f = -1f; clip = true; }
                     sumSq += f * f;
-                    samples[i] = (short)(f * 32767f);
+                    short s16 = (short)(f * 32767f);
+                    dst[i * 2]     = (byte)(s16 & 0xFF);
+                    dst[i * 2 + 1] = (byte)(s16 >> 8);
                 }
-                _level = MathF.Min(MathF.Sqrt(sumSq / (bytes / 2)) * 4f, 1f);
+                _level = MathF.Min(MathF.Sqrt(sumSq / samples) * 4f, 1f);
+                _clip  = clip;
+            }
+            else
+            {
+                // int16 → apply gain → int16
+                int samples = bytes / 2;
+                dst = new byte[bytes];
+                float sumSq = 0f;
+                bool  clip  = false;
+
+                for (int i = 0; i < samples; i++)
+                {
+                    float f = BitConverter.ToInt16(src, i * 2) / 32768f * _gain;
+                    if (f >  1f) { f =  1f; clip = true; }
+                    if (f < -1f) { f = -1f; clip = true; }
+                    sumSq += f * f;
+                    short s16 = (short)(f * 32767f);
+                    dst[i * 2]     = (byte)(s16 & 0xFF);
+                    dst[i * 2 + 1] = (byte)(s16 >> 8);
+                }
+                _level = MathF.Min(MathF.Sqrt(sumSq / samples) * 4f, 1f);
                 _clip  = clip;
             }
 
-            _buffer?.AddSamples(buf, 0, bytes);
-
-            // update clip label on UI thread
+            _buffer?.AddSamples(dst, 0, dst.Length);
             BeginInvoke(() => lblClip.Text = _clip ? "⚠ CLIP" : "");
         }
 
         private void StopAudio()
         {
-            _waveIn?.StopRecording();
-            _waveIn?.Dispose();
-            _waveOut?.Stop();
-            _waveOut?.Dispose();
-            _waveIn  = null;
-            _waveOut = null;
+            _capture?.StopRecording();
+            _capture?.Dispose();
+            _output?.Stop();
+            _output?.Dispose();
+            _capture = null;
+            _output  = null;
             _buffer  = null;
             _level   = 0;
             _clip    = false;
@@ -413,18 +448,14 @@ namespace MicBoost
         // ─────────────────────────────────────────────────────────────
         private void OnVUPaint(object? s, PaintEventArgs e)
         {
-            var g   = e.Graphics;
-            int w   = pnlVU.Width;
-            int h   = pnlVU.Height;
+            int w    = pnlVU.Width;
+            int h    = pnlVU.Height;
             int fill = (int)(w * _level);
-
-            Color barColor = _level > 0.85f ? RED :
-                             _level > 0.60f ? YELLOW : GREEN;
-
-            g.Clear(PANEL);
+            Color barColor = _level > 0.85f ? RED : _level > 0.60f ? YELLOW : GREEN;
+            e.Graphics.Clear(PANEL);
             if (fill > 0)
                 using (var br = new SolidBrush(barColor))
-                    g.FillRectangle(br, 0, 0, fill, h);
+                    e.Graphics.FillRectangle(br, 0, 0, fill, h);
         }
 
         // ─────────────────────────────────────────────────────────────
@@ -437,9 +468,9 @@ namespace MicBoost
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
-                using var br = new SolidBrush(ACCENT);
-                g.FillEllipse(br, 1, 1, 14, 14);
+                using var br  = new SolidBrush(ACCENT);
                 using var br2 = new SolidBrush(BG);
+                g.FillEllipse(br,  1, 1, 14, 14);
                 g.FillRectangle(br2, 6, 3, 4, 7);
                 g.FillEllipse(br2, 4, 8, 8, 4);
                 g.FillRectangle(br2, 7, 12, 2, 3);
@@ -461,37 +492,32 @@ namespace MicBoost
 
         private void SetDot(Color c)
         {
-            if (Controls["lblDot"] is Label dot)
-                dot.ForeColor = c;
+            if (Controls["lblDot"] is Label dot) dot.ForeColor = c;
         }
 
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
-            if (WindowState == FormWindowState.Minimized)
-                Hide();
+            if (WindowState == FormWindowState.Minimized) Hide();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (e.CloseReason == CloseReason.UserClosing)
-            {
-                e.Cancel = true;
-                Hide();
-                return;
-            }
+            { e.Cancel = true; Hide(); return; }
             StopAudio();
             if (_trayIcon != null) _trayIcon.Visible = false;
             base.OnFormClosing(e);
         }
-    }
 
-    // ── Helper ───────────────────────────────────────────────────────
-    public class DeviceItem
-    {
-        public int    Index { get; }
-        public string Name  { get; }
-        public DeviceItem(int index, string name) { Index = index; Name = name; }
-        public override string ToString() => $"[{Index}] {Name}";
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (var d in _inDevices)  try { d.Dispose(); } catch { }
+                foreach (var d in _outDevices) try { d.Dispose(); } catch { }
+            }
+            base.Dispose(disposing);
+        }
     }
 }
