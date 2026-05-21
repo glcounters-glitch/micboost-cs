@@ -273,16 +273,21 @@ namespace MicBoost
                 cmbInput.Items.Add(name);
             }
 
-            // Outputs
-            var outColl = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+            // Outputs — включаем все состояния чтобы не потерять VB-CABLE
+            var outColl = enumerator.EnumerateAudioEndPoints(DataFlow.Render,
+                DeviceState.Active | DeviceState.Unplugged | DeviceState.Disabled);
             var seenOut = new HashSet<string>();
             foreach (var dev in outColl)
             {
-                var name = dev.FriendlyName;
-                if (seenOut.Contains(name)) { dev.Dispose(); continue; }
-                seenOut.Add(name);
-                _outDevices.Add(dev);
-                cmbOutput.Items.Add(name);
+                try
+                {
+                    var name = dev.FriendlyName;
+                    if (seenOut.Contains(name)) { dev.Dispose(); continue; }
+                    seenOut.Add(name);
+                    _outDevices.Add(dev);
+                    cmbOutput.Items.Add(name);
+                }
+                catch { dev.Dispose(); }
             }
 
             // Auto-select USB mic
