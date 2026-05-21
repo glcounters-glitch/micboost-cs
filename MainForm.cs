@@ -304,7 +304,7 @@ namespace MicBoost
             var inDev  = _inDevices[inIdx];
             var outDev = _outDevices[outIdx];
 
-            // ── Фиксируем уровень входа (USB mic) и выхода (CABLE Output) = 100% ──
+            // ── Фиксируем уровень USB mic = 100% ──
             try
             {
                 inDev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
@@ -312,10 +312,22 @@ namespace MicBoost
             }
             catch { /* не критично */ }
 
+            // ── Фиксируем уровень CABLE Output (устройство захвата) = 100% ──
             try
             {
-                outDev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
-                outDev.AudioEndpointVolume.Mute = false;
+                var enumerator = new MMDeviceEnumerator();
+                var capDevs = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+                foreach (var dev in capDevs)
+                {
+                    if (dev.FriendlyName.ToLower().Contains("cable output"))
+                    {
+                        dev.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
+                        dev.AudioEndpointVolume.Mute = false;
+                        dev.Dispose();
+                        break;
+                    }
+                    dev.Dispose();
+                }
             }
             catch { /* не критично */ }
 
